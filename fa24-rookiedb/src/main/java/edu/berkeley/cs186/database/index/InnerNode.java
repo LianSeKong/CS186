@@ -52,7 +52,7 @@ class InnerNode extends BPlusNode {
     InnerNode(BPlusTreeMetadata metadata, BufferManager bufferManager, List<DataBox> keys,
               List<Long> children, LockContext treeContext) {
         this(metadata, bufferManager, bufferManager.fetchNewPage(treeContext, metadata.getPartNum()),
-             keys, children, treeContext);
+                keys, children, treeContext);
     }
 
     /**
@@ -81,8 +81,9 @@ class InnerNode extends BPlusNode {
     @Override
     public LeafNode get(DataBox key) {
         // TODO(proj2): implement
-
-        return null;
+        int index = numLessThanEqual(key, keys);
+        BPlusNode node = getChild(index);
+        return node.get(key);
     }
 
     // See BPlusNode.getLeftmostLeaf.
@@ -90,24 +91,101 @@ class InnerNode extends BPlusNode {
     public LeafNode getLeftmostLeaf() {
         assert(children.size() > 0);
         // TODO(proj2): implement
-
-        return null;
+        return getChild(0).getLeftmostLeaf();
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
-        // TODO(proj2): implement
 
-        return Optional.empty();
+        int index = numLessThanEqual(key, keys);
+        Optional<Pair<DataBox, Long>> opt = getChild(index).put(key, rid);
+        if (!opt.isPresent()) {
+            return Optional.empty();
+        }
+
+        // overflow
+        DataBox overflow_key= opt.get().getFirst();
+        long overflow_page = opt.get().getSecond();
+        index = numLessThan(overflow_key, keys);
+        List<Long> children = new ArrayList<>();
+        List<DataBox> keys = new ArrayList<>();
+
+        for (int i = 0; i < this.keys.size(); i++) {
+            if (i == index ) {
+                keys.add(overflow_key);
+                children.add(this.children.get(i));
+                keys.add(this.keys.get(i));
+                children.add(overflow_page);
+            } else {
+                keys.add(this.keys.get(i));
+                children.add(this.children.get(i));
+            }
+        }
+        children.add(this.children.get(this.keys.size()));
+        if (index == this.keys.size()) {
+            keys.add(overflow_key);
+            children.add(overflow_page);
+        }
+        this.children = children;
+        this.keys = keys;
+
+        // 处理自身的overflow
+        if (this.keys.size() <= metadata.getOrder() * 2) {
+            sync();
+            return Optional.empty();
+        }
+        keys = new ArrayList<>();
+        children = new ArrayList<>();
+        int origin_keys_len = this.keys.size();
+        overflow_key = this.keys.remove(metadata.getOrder());
+        children.add(this.children.remove(metadata.getOrder() + 1));
+        int i = metadata.getOrder();
+        while (i < origin_keys_len - 1) {
+            keys.add(this.keys.remove(metadata.getOrder()));
+            children.add(this.children.remove(metadata.getOrder() + 1));
+            i += 1;
+        }
+        InnerNode spliteNode = new InnerNode(metadata, bufferManager, keys, children, treeContext);
+
+        sync();
+        spliteNode.sync();
+        return Optional.of(new Pair<>(overflow_key, spliteNode.page.getPageNum()));
     }
 
     // See BPlusNode.bulkLoad.
     @Override
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
-            float fillFactor) {
+                                                  float fillFactor) {
         // TODO(proj2): implement
-
+        Optional<Pair<DataBox, Long>> overflow = getChild(getChildren().size() - 1).bulkLoad(data, fillFactor);
+        if (overflow.isPresent()) {
+            int d = metadata.getOrder();
+            DataBox key= overflow.get().getFirst();
+            long page = overflow.get().getSecond();
+            if (keys.size() < fillFactor * 2 * d) {
+                keys.add(key);
+                children.add(page);
+                sync();
+                return Optional.empty();
+            } else {
+                List<Long> children = new ArrayList<>();
+                List<DataBox> keys = new ArrayList<>();
+                int i = (int) (fillFactor * d);
+                int split_i = i;
+                while (i < fillFactor * 2 * d) {
+                    keys.add(this.keys.remove(split_i));
+                    children.add(this.children.remove(split_i + 1));
+                    i += 1;
+                }
+                keys.add(key);
+                children.add(page);
+                InnerNode splitNode = new InnerNode(metadata, bufferManager, keys, children, treeContext);
+                sync();
+                splitNode.sync();
+                return Optional.of(new Pair<>(key, splitNode.page.getPageNum()));
+            }
+        }
         return Optional.empty();
     }
 
@@ -115,7 +193,9 @@ class InnerNode extends BPlusNode {
     @Override
     public void remove(DataBox key) {
         // TODO(proj2): implement
-
+        int index = numLessThanEqual(key,keys);
+        getChild(index).remove(key);
+        sync();
         return;
     }
 
@@ -286,7 +366,7 @@ class InnerNode extends BPlusNode {
             long childPageNum = child.getPage().getPageNum();
             lines.add(child.toDot());
             lines.add(String.format("  \"node%d\":f%d -> \"node%d\";",
-                                    pageNum, i, childPageNum));
+                    pageNum, i, childPageNum));
         }
 
         return String.join("\n", lines);
@@ -370,8 +450,8 @@ class InnerNode extends BPlusNode {
         }
         InnerNode n = (InnerNode) o;
         return page.getPageNum() == n.page.getPageNum() &&
-               keys.equals(n.keys) &&
-               children.equals(n.children);
+                keys.equals(n.keys) &&
+                children.equals(n.children);
     }
 
     @Override

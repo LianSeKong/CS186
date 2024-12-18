@@ -146,8 +146,8 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): implement
-
-        return Optional.empty();
+        LeafNode lfn = root.get(key);
+        return lfn.getKey(key);
     }
 
     /**
@@ -203,7 +203,8 @@ public class BPlusTree {
 
         // TODO(proj2): Return a BPlusTreeIterator.
 
-        return Collections.emptyIterator();
+        LeafNode lfn = this.root.getLeftmostLeaf();
+        return new BPlusTreeIterator(lfn);
     }
 
     /**
@@ -235,8 +236,9 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): Return a BPlusTreeIterator.
+        LeafNode leafNode = root.get(key);
+        return new BPlusTreeIterator(leafNode, key);
 
-        return Collections.emptyIterator();
     }
 
     /**
@@ -258,6 +260,18 @@ public class BPlusTree {
         // Use the provided updateRoot() helper method to change
         // the tree's root if the old root splits.
 
+        Optional<Pair<DataBox, Long>> opt = root.put(key, rid);
+        if (opt.isPresent()) {
+            List<DataBox> keys = new ArrayList<>();
+            List<Long> children = new ArrayList<>();
+            keys.add(opt.get().getFirst());
+            children.add(this.root.getPage().getPageNum());
+            children.add(opt.get().getSecond());
+            InnerNode in = new InnerNode(this.metadata, bufferManager, keys,children,lockContext);
+
+            this.updateRoot(in);
+
+        }
         return;
     }
 
@@ -270,11 +284,11 @@ public class BPlusTree {
      * be filled up to full and split in half exactly like in put.
      *
      * This method should raise an exception if the tree is not empty at time
-     * of bulk loading. Bulk loading is used when creating a new Index, so think 
-     * about what an "empty" tree should look like. If data does not meet the 
-     * preconditions (contains duplicates or not in order), the resulting 
-     * behavior is undefined. Undefined behavior means you can handle these 
-     * cases however you want (or not at all) and you are not required to 
+     * of bulk loading. Bulk loading is used when creating a new Index, so think
+     * about what an "empty" tree should look like. If data does not meet the
+     * preconditions (contains duplicates or not in order), the resulting
+     * behavior is undefined. Undefined behavior means you can handle these
+     * cases however you want (or not at all) and you are not required to
      * write any explicit checks.
      *
      * The behavior of this method should be similar to that of InnerNode's
@@ -288,8 +302,21 @@ public class BPlusTree {
         // Note: You should NOT update the root variable directly.
         // Use the provided updateRoot() helper method to change
         // the tree's root if the old root splits.
+        while (data.hasNext()) {
+            Optional<Pair<DataBox, Long>> overflow = root.bulkLoad(data, fillFactor);
+            if (overflow.isPresent()) {
+                List<DataBox> keys = new ArrayList<>();
+                List<Long> children = new ArrayList<>();
+                keys.add(overflow.get().getFirst());
+                children.add(this.root.getPage().getPageNum());
+                children.add(overflow.get().getSecond());
+                InnerNode in = new InnerNode(this.metadata, bufferManager, keys,children,lockContext);
+                this.updateRoot(in);
+            }
+        }
 
         return;
+
     }
 
     /**
@@ -309,7 +336,7 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): implement
-
+        root.remove(key);
         return;
     }
 
@@ -423,19 +450,37 @@ public class BPlusTree {
     // Iterator ////////////////////////////////////////////////////////////////
     private class BPlusTreeIterator implements Iterator<RecordId> {
         // TODO(proj2): Add whatever fields and constructors you want here.
+        private LeafNode lfn;
+        private Iterator<RecordId> itr;
 
+        BPlusTreeIterator(LeafNode lfn) {
+            this.lfn = lfn;
+            this.itr = lfn.scanAll();
+        }
+        BPlusTreeIterator(LeafNode lfn, DataBox key) {
+            this.lfn = lfn;
+            this.itr = lfn.scanGreaterEqual(key);
+        }
         @Override
         public boolean hasNext() {
-            // TODO(proj2): implement
-
-            return false;
+            if (itr.hasNext()) {
+                return true;
+            } else {
+                Optional<LeafNode> srb = this.lfn.getRightSibling();
+                if (srb.isPresent()) {
+                    this.lfn = srb.get();
+                    this.itr = this.lfn.scanAll();
+                    return true;
+                } else {
+                    return false;
+                }
+            }
         }
 
         @Override
         public RecordId next() {
             // TODO(proj2): implement
-
-            throw new NoSuchElementException();
+            return this.itr.next();
         }
     }
 }

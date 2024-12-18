@@ -9,6 +9,7 @@ import edu.berkeley.cs186.database.memory.BufferManager;
 import edu.berkeley.cs186.database.memory.Page;
 import edu.berkeley.cs186.database.table.RecordId;
 
+
 import java.nio.ByteBuffer;
 import java.util.*;
 
@@ -114,8 +115,8 @@ class LeafNode extends BPlusNode {
     LeafNode(BPlusTreeMetadata metadata, BufferManager bufferManager, List<DataBox> keys,
              List<RecordId> rids, Optional<Long> rightSibling, LockContext treeContext) {
         this(metadata, bufferManager, bufferManager.fetchNewPage(treeContext, metadata.getPartNum()),
-             keys, rids,
-             rightSibling, treeContext);
+                keys, rids,
+                rightSibling, treeContext);
     }
 
     /**
@@ -147,41 +148,103 @@ class LeafNode extends BPlusNode {
     @Override
     public LeafNode get(DataBox key) {
         // TODO(proj2): implement
-
-        return null;
+        return this;
     }
 
     // See BPlusNode.getLeftmostLeaf.
     @Override
     public LeafNode getLeftmostLeaf() {
         // TODO(proj2): implement
-
-        return null;
+        return this;
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
-        // TODO(proj2): implement
+        if (getKeys().contains(key)) {
+            throw new BPlusTreeException("Already exist!");
+        }
+        int order = metadata.getOrder();
+        int lessIdx = InnerNode.numLessThanEqual(key, keys);
+        List<DataBox> keys = new ArrayList<>();
+        List<RecordId> rids = new ArrayList<>();
+        for (int i = 0; i < this.keys.size(); i++) {
+            if (i == lessIdx) {
+                keys.add(key);
+                rids.add(rid);
+            }
+            keys.add(this.keys.get(i));
+            rids.add(this.rids.get(i));
+        }
+        if (lessIdx == this.keys.size()) { // 处理尾部情况
+            keys.add(key);
+            rids.add(rid);
+        }
+        this.rids = rids;
+        this.keys = keys;
 
-        return Optional.empty();
+        if (this.keys.size() <= 2 * order) {
+            sync();
+            return Optional.empty();
+        }
+        // 处理overflow情况
+        List<DataBox> rightKeys = new ArrayList<>();
+        List<RecordId> rightRids = new ArrayList<>();
+        // 复制长度
+        int copyLen = this.keys.size() - order;
+        int i = 0;
+        while (i < copyLen) {
+            rightKeys.add(this.keys.remove(order));
+            rightRids.add(this.rids.remove(order));
+            i += 1;
+        }
+
+        LeafNode rlf = new LeafNode(this.metadata, this.bufferManager, rightKeys, rightRids, this.rightSibling, this.treeContext);
+
+        this.rightSibling = Optional.of(rlf.page.getPageNum());
+
+        sync();
+        rlf.sync();
+
+        return Optional.of(new Pair<>(rlf.keys.get(0), rlf.page.getPageNum()));
     }
-
     // See BPlusNode.bulkLoad.
     @Override
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
-            float fillFactor) {
-        // TODO(proj2): implement
+                                                  float fillFactor) {
 
+        int d = metadata.getOrder();
+        for (Iterator<Pair<DataBox, RecordId>> it = data; it.hasNext(); ) {
+            Pair<DataBox, RecordId> p = it.next();
+            if (this.keys.size() == d * 2 * fillFactor) {
+                List<DataBox> rightKeys = new ArrayList<>();
+                List<RecordId> rightRids = new ArrayList<>();
+                rightKeys.add(p.getFirst());
+                rightRids.add(p.getSecond());
+                LeafNode rlf = new LeafNode(this.metadata, this.bufferManager, rightKeys, rightRids, this.rightSibling, this.treeContext);
+                this.rightSibling = Optional.of(rlf.page.getPageNum());
+                sync();
+                rlf.sync();
+                return Optional.of(new Pair<>(rlf.keys.get(0), rlf.page.getPageNum()));
+            }
+            this.keys.add(p.getFirst());
+            this.rids.add(p.getSecond());
+            sync();
+        }
         return Optional.empty();
     }
 
     // See BPlusNode.remove.
     @Override
     public void remove(DataBox key) {
-        // TODO(proj2): implement
-
-        return;
+        for (int i = 0; i < this.keys.size(); i++) {
+            if (this.keys.get(i).equals(key)) {
+                this.keys.remove(i);
+                this.rids.remove(i);
+                sync();
+                return;
+            }
+        }
     }
 
     // Iterators ///////////////////////////////////////////////////////////////
@@ -222,6 +285,9 @@ class LeafNode extends BPlusNode {
         }
 
         long pageNum = rightSibling.get();
+        if (pageNum == -1) {
+            return Optional.empty();
+        }
         return Optional.of(LeafNode.fromBytes(metadata, bufferManager, treeContext, pageNum));
     }
 
@@ -376,8 +442,25 @@ class LeafNode extends BPlusNode {
         // Note: LeafNode has two constructors. To implement fromBytes be sure to
         // use the constructor that reuses an existing page instead of fetching a
         // brand new one.
+        Page page = bufferManager.fetchPage(treeContext, pageNum);
+        Buffer buf = page.getBuffer();
 
-        return null;
+        byte nodeType = buf.get();
+        assert(nodeType == (byte) 1);
+
+        List<DataBox> keys = new ArrayList<>();
+        List<RecordId> rids = new ArrayList<>();
+
+        long rightSibling = buf.getLong();
+        int n = buf.getInt();
+        int keySize = metadata.getKeySchema().getSizeInBytes();
+        int ridSize = RecordId.getSizeInBytes();
+        for (int i = 0; i < n; ++i) {
+            keys.add(DataBox.fromBytes(buf, metadata.getKeySchema()));
+            rids.add(RecordId.fromBytes(buf));
+        }
+
+        return new LeafNode(metadata, bufferManager, page, keys, rids, Optional.of(rightSibling), treeContext);
     }
 
     // Builtins ////////////////////////////////////////////////////////////////
@@ -391,9 +474,9 @@ class LeafNode extends BPlusNode {
         }
         LeafNode n = (LeafNode) o;
         return page.getPageNum() == n.page.getPageNum() &&
-               keys.equals(n.keys) &&
-               rids.equals(n.rids) &&
-               rightSibling.equals(n.rightSibling);
+                keys.equals(n.keys) &&
+                rids.equals(n.rids) &&
+                rightSibling.equals(n.rightSibling);
     }
 
     @Override
