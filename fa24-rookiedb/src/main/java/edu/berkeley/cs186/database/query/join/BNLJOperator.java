@@ -40,7 +40,7 @@ public class BNLJOperator extends JoinOperator {
         int numLeftPages = getLeftSource().estimateStats().getNumPages();
         int numRightPages = getRightSource().estimateIOCost();
         return ((int) Math.ceil((double) numLeftPages / (double) usableBuffers)) * numRightPages +
-               getLeftSource().estimateIOCost();
+                getLeftSource().estimateIOCost();
     }
 
     /**
@@ -88,6 +88,11 @@ public class BNLJOperator extends JoinOperator {
          */
         private void fetchNextLeftBlock() {
             // TODO(proj3_part1): implement
+            if (this.leftSourceIterator.hasNext()) {
+                this.leftBlockIterator = getBlockIterator(this.leftSourceIterator, getLeftSource().getSchema(), numBuffers - 2);
+                this.leftBlockIterator.markNext();
+                this.leftRecord = this.leftBlockIterator.next();
+            }
         }
 
         /**
@@ -103,6 +108,10 @@ public class BNLJOperator extends JoinOperator {
          */
         private void fetchNextRightPage() {
             // TODO(proj3_part1): implement
+            if (this.rightSourceIterator.hasNext()) {
+                this.rightPageIterator = getBlockIterator(this.rightSourceIterator, getRightSource().getSchema(), 1);
+                this.rightPageIterator.markNext();
+            }
         }
 
         /**
@@ -115,6 +124,33 @@ public class BNLJOperator extends JoinOperator {
          */
         private Record fetchNextRecord() {
             // TODO(proj3_part1): implement
+            while (true) {
+                // 1. The right page iterator has a value to yield
+                while (this.rightPageIterator.hasNext()) {
+                    Record rightRecord = this.rightPageIterator.next();
+                    if (compare(leftRecord, rightRecord) == 0) {
+                        return leftRecord.concat(rightRecord);
+                    }
+                }
+                // 2. The right page iterator doesn't hava a value to yield
+                // 2.1 The left page has a value to yield
+                if (this.leftBlockIterator.hasNext()) {
+                    this.leftRecord = this.leftBlockIterator.next();
+                    this.rightPageIterator.reset();
+                } else {  // 2.2 The left page doesn't hava a value to yield
+                    if (this.rightSourceIterator.hasNext()) {
+                        this.fetchNextRightPage();
+                        this.leftBlockIterator.reset();
+                        this.leftRecord = this.leftBlockIterator.next();
+                    } else if (this.leftSourceIterator.hasNext()) {
+                        this.fetchNextLeftBlock();
+                        this.rightSourceIterator.reset();
+                        this.fetchNextRightPage();
+                    } else {
+                        break;
+                    }
+                }
+            }
             return null;
         }
 

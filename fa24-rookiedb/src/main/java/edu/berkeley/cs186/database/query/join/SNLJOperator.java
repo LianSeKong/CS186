@@ -20,7 +20,7 @@ public class SNLJOperator extends JoinOperator {
                         String rightColumnName,
                         TransactionContext transaction) {
         super(leftSource, materialize(rightSource, transaction),
-              leftColumnName, rightColumnName, transaction, JoinType.SNLJ);
+                leftColumnName, rightColumnName, transaction, JoinType.SNLJ);
         this.stats = this.estimateStats();
     }
 

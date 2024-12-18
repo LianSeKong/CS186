@@ -20,8 +20,8 @@ public class SortMergeOperator extends JoinOperator {
                              String rightColumnName,
                              TransactionContext transaction) {
         super(prepareLeft(transaction, leftSource, leftColumnName),
-              prepareRight(transaction, rightSource, rightColumnName),
-              leftColumnName, rightColumnName, transaction, JoinType.SORTMERGE);
+                prepareRight(transaction, rightSource, rightColumnName),
+                leftColumnName, rightColumnName, transaction, JoinType.SORTMERGE);
         this.stats = this.estimateStats();
     }
 
@@ -87,10 +87,10 @@ public class SortMergeOperator extends JoinOperator {
      */
     private class SortMergeIterator implements Iterator<Record> {
         /**
-        * Some member variables are provided for guidance, but there are many possible solutions.
-        * You should implement the solution that's best for you, using any member variables you need.
-        * You're free to use these member variables, but you're not obligated to.
-        */
+         * Some member variables are provided for guidance, but there are many possible solutions.
+         * You should implement the solution that's best for you, using any member variables you need.
+         * You're free to use these member variables, but you're not obligated to.
+         */
         private Iterator<Record> leftIterator;
         private BacktrackingIterator<Record> rightIterator;
         private Record leftRecord;
@@ -140,7 +140,39 @@ public class SortMergeOperator extends JoinOperator {
          */
         private Record fetchNextRecord() {
             // TODO(proj3_part1): implement
-            return null;
+
+            while (true) {
+                if (leftRecord == null) {
+                    return null;
+                } else if (compare(leftRecord, rightRecord) == 0) {
+                    Record concat = leftRecord.concat(rightRecord);
+                    marked = true;
+                    if (rightIterator.hasNext()) {
+                        rightRecord = rightIterator.next();
+                    } else if (leftIterator.hasNext()){
+                        leftRecord = leftIterator.next();
+                        rightIterator.reset();
+                        rightRecord = rightIterator.next();
+                    } else {
+                        leftRecord = null;
+                    }
+                    return concat;
+                } else if (marked) {
+                    rightIterator.reset();
+                    rightRecord = rightIterator.next();
+                    leftRecord = leftIterator.hasNext() ? leftIterator.next() : null;
+                    marked = false;
+                } else {
+                    while (rightIterator.hasNext()) {
+                        rightRecord = rightIterator.next();
+                        if (compare(leftRecord, rightRecord) == 0) {
+                            rightIterator.markPrev();
+                            break;
+                        }
+                    }
+                    marked = true;
+                }
+            }
         }
 
         @Override

@@ -110,7 +110,7 @@ public class QueryPlan {
                 if (fieldName.equals(column)) {
                     if (result != null) throw new RuntimeException(
                             "Ambiguous column name `" + column + " found in both `" +
-                            result + "` and `" + tableName + "`.");
+                                    result + "` and `" + tableName + "`.");
                     result = tableName;
                 }
             }
@@ -216,9 +216,9 @@ public class QueryPlan {
             this.rightColumn = rightColumn;
             if (!tableName.equals(rightTable) && !tableName.equals(leftTable)) {
                 throw new IllegalArgumentException(String.format(
-                    "`%s` is invalid. ON clause of INNER JOIN must contain the " +
-                            "new table being joined.",
-                    this.toString()
+                        "`%s` is invalid. ON clause of INNER JOIN must contain the " +
+                                "new table being joined.",
+                        this.toString()
                 ));
             }
         }
@@ -228,10 +228,10 @@ public class QueryPlan {
             String unAliased = aliases.get(joinTable);
             if (unAliased.equals(joinTable)) {
                 return String.format("INNER JOIN %s ON %s = %s",
-                    this.joinTable, this.leftColumn, this.rightColumn);
+                        this.joinTable, this.leftColumn, this.rightColumn);
             }
             return String.format("INNER JOIN %s AS %s ON %s = %s",
-                unAliased, this.joinTable, this.leftColumn, this.rightColumn);
+                    unAliased, this.joinTable, this.leftColumn, this.rightColumn);
         }
     }
 
@@ -577,7 +577,21 @@ public class QueryPlan {
         QueryOperator minOp = new SequentialScanOperator(this.transaction, table);
 
         // TODO(proj3_part2): implement
-        return minOp;
+        // new IndexScanOperator(this.transaction, table);
+        // eligible: 符合条件的
+        List<Integer> eligibleIndexColumns = getEligibleIndexColumns(table);
+
+        int except = -1;
+        for (Integer index: eligibleIndexColumns) {
+            SelectPredicate predicate = this.selectPredicates.get(index);
+            QueryOperator indexOp = new IndexScanOperator(this.transaction, table, predicate.column, predicate.operator, predicate.value);
+
+            if (minOp.estimateIOCost() >= indexOp.estimateIOCost()) {
+                minOp = indexOp;
+                except = index;
+            }
+        }
+        return addEligibleSelections(minOp, except);
     }
 
     // Task 6: Join Selection //////////////////////////////////////////////////
@@ -616,21 +630,86 @@ public class QueryPlan {
      * each table set, check each join predicate to see if there is a valid join
      * with a new table. If so, find the minimum cost join. Return a map from
      * each set of table names being joined to its lowest cost join operator.
-     *
+     * 遍历上一次搜索中所有的表集合。
+     * 对于每个表集合，检查每个连接谓词，看看是否有与新表的有效连接。
+     * 如果有，找到最小成本的连接。
+     * 返回一个映射，将每个正在连接的表名集合映射到其最低成本的连接操作符。
      * Join predicates are stored as elements of `this.joinPredicates`.
      *
      * @param prevMap  maps a set of tables to a query operator over the set of
      *                 tables. Each set should have pass number - 1 elements.
+     * 映射一个表集合到一个查询操作符，该操作符作用于该集合中的表。
+     *                 每个集合应该包含前一次迭代（即上一个 pass）中的元素。
      * @param pass1Map each set contains exactly one table maps to a single
      *                 table access (scan) query operator.
+     * 每个集合包含恰好一个表，映射到单个表访问（扫描）查询操作符。
      * @return a mapping of table names to a join QueryOperator. The number of
      * elements in each set of table names should be equal to the pass number.
+     * 一个表名到连接查询操作符的映射。每个表名集合中的元素数量应该等于当前的 pass 编号
      */
     public Map<Set<String>, QueryOperator> minCostJoins(
             Map<Set<String>, QueryOperator> prevMap,
             Map<Set<String>, QueryOperator> pass1Map) {
         Map<Set<String>, QueryOperator> result = new HashMap<>();
         // TODO(proj3_part2): implement
+        // 我们提供了你需要实现的逻辑的基本描述：
+        // 对于 prevMap 中的每个表集合
+        //   对于 this.joinPredicates 中列出的每个连接谓词
+        //      获取谓词的左边和右边（表名和列名）
+        //
+        //      情况 1：集合中包含左表但不包含右表，使用 pass1Map
+        //              获取一个操作符来访问右表。
+        //      情况 2：集合中包含右表但不包含左表，使用 pass1Map
+        //              获取一个操作符来访问左表。
+        //      情况 3：否则，跳过该连接谓词并继续循环。
+        //
+        //      使用情况 1 或 2 中的操作符，使用 minCostJoinType 来
+        //      计算与新表（你从 pass1Map 中获取的操作符所对应的表）
+        //      和之前已连接的表的最便宜连接。然后，根据需要更新结果映射。
+
+        for (Map.Entry<Set<String>, QueryOperator> entry : prevMap.entrySet()) {
+            Set<String> prevTables = entry.getKey();
+            QueryOperator prevOp = entry.getValue();
+            QueryOperator minOp = null;
+            String minOpTableName = null;
+            for (JoinPredicate predicate : this.joinPredicates) {
+                QueryOperator op = null;
+                String tableName = null;
+                if (prevTables.contains(predicate.leftTable) && !prevTables.contains(predicate.rightTable)) {
+                    for (Map.Entry<Set<String>, QueryOperator> pass1:  pass1Map.entrySet()) {
+                        if (pass1.getKey().contains(predicate.rightTable)) {
+                            op = minCostJoinType(prevOp, pass1.getValue(),  predicate.leftColumn, predicate.rightColumn);
+                            tableName = predicate.rightTable;
+                        }
+                    }
+
+                } else if (prevTables.contains(predicate.rightTable) && !prevTables.contains(predicate.leftTable)) {
+                    for (Map.Entry<Set<String>, QueryOperator> pass1:  pass1Map.entrySet()) {
+                        if (pass1.getKey().contains(predicate.leftTable)) {
+                            tableName = predicate.leftTable;
+                            op = minCostJoinType(pass1.getValue(), prevOp, predicate.leftColumn, predicate.rightColumn);
+                        }
+                    }
+                } else {
+                    continue;
+                }
+                if (minOp == null || minOp.estimateIOCost() > op.estimateIOCost()) {
+                    minOp = op;
+                    minOpTableName = tableName;
+                }
+            }
+            if (minOp != null && minOpTableName != null) {
+                Set<String> set = new HashSet<>(prevTables);
+                set.add(minOpTableName);
+                result.put(set, minOp);
+            }
+
+        }
+
+
+
+
+
         // We provide a basic description of the logic you have to implement:
         // For each set of tables in prevMap
         //   For each join predicate listed in this.joinPredicates
@@ -650,7 +729,10 @@ public class QueryPlan {
     }
 
     // Task 7: Optimal Plan Selection //////////////////////////////////////////
-
+    /*
+     * 在给定的映射中找到最低成本的 QueryOperator。每次搜索算法的遍历都会生成一个映射，
+     * 该映射将一组表与访问这些表的最低成本的 QueryOperator 关联起来。
+     */
     /**
      * Finds the lowest cost QueryOperator in the given mapping. A mapping is
      * generated on each pass of the search algorithm, and relates a set of tables
@@ -695,7 +777,47 @@ public class QueryPlan {
         // Set the final operator to the lowest cost operator from the last
         // pass, add group by, project, sort and limit operators, and return an
         // iterator over the final operator.
-        return this.executeNaive(); // TODO(proj3_part2): Replace this!
+
+
+        // 第一遍：对于每个表，找到访问该表的最低成本 QueryOperator。
+        // 构建每个表名与其最低成本操作符之间的映射。
+
+        // 第 i 遍：在每一遍中，使用上一遍的结果来找到与第一遍中每个表的最低成本连接。
+        // 重复此过程，直到所有表都已连接。
+
+        // 设置最终的操作符为最后一遍的最低成本操作符，添加 group by、project、sort 和 limit 操作符，
+        // 并返回最终操作符的迭代器。
+
+        Map<Set<String>, QueryOperator> pass1Map = new HashMap<>();
+        Map<Set<String>, QueryOperator> prevMap = new HashMap<>();
+        for (String tableName: this.tableNames) {
+            Set<String> tablesPrev = new HashSet<>();
+            Set<String> tablesPass1 = new HashSet<>();
+            tablesPrev.add(tableName);
+            tablesPass1.add(tableName);
+            pass1Map.put(tablesPass1, minCostSingleAccess(tableName));
+            prevMap.put(tablesPrev, minCostSingleAccess(tableName));
+        }
+
+        while (true) {
+            Map<Set<String>, QueryOperator> opMap = this.minCostJoins(prevMap, pass1Map);
+            if (opMap.isEmpty()) {
+                break;
+            }
+            prevMap = opMap;
+        }
+
+
+        this.finalOperator = minCostOperator(prevMap);
+        addGroupBy();
+        addProject();
+        addSort();
+        addLimit();
+        return this.finalOperator.iterator();
+
+
+
+        //return this.executeNaive(); // TODO(proj3_part2): Replace this!
     }
 
     // EXECUTE NAIVE ///////////////////////////////////////////////////////////
